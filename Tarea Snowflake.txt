@@ -1,0 +1,193 @@
+-- contexto
+use warehouse BADGER_WH;
+use database UCM;
+use schema SMART_DESK;
+
+-- visualizacion de las tablas
+select * from sales;
+select * from accounts;
+select * from forecasts;
+
+-- 1. Análisis de Ventas y Beneficio por Categoría de Producto
+
+select
+    category as Categoria,
+    sum(maintenance) as Mantenimiento,
+    sum(product) as Producto,
+    sum(parts) as Partes,
+    sum(support) as Soporte,
+    sum(total) as Total_Ventas,
+    sum(units_sold) as Unidades_Vendidas,
+    sum(profit) as Beneficio_Total
+from sales
+where account = 'Adabs Entertainment' and year = 2020
+group by category;
+
+-- 2. Comparación de Rendimiento por País en Regiones APAC y EMEA
+
+select a.region as Region,
+       a.country as Pais,
+       round(avg(total),2) as Ingreso_promedio,
+       round(avg(units_sold),2) as Unidades_vendidas_promedio,
+       round(avg(profit),2) as Beneficio_promedio
+from accounts as a join sales as s
+on a.account = s.account
+where Region in('APAC','EMEA')
+group by Region, Pais
+order by Beneficio_promedio desc;
+
+--3. Análisis del Beneficio Total por Industria: Estudio de Clientes en Etapa de Compromiso
+
+with industria_commit as(
+      select distinct a.industry as industria,
+             f.account as cuentas_commit
+      from forecasts as f 
+      join accounts as a on f.account = a.account
+      where f.prediction_category = 'Commit' and f.forecast > 500000
+)
+
+select i.industria,
+       sum(s.profit) as beneficio_total,
+       case
+            when beneficio_total > 1000000 then 'Alto'
+            else 'Normal'
+            end as categoria_segun_beneficio
+from sales as s join industria_commit as i
+on s.account = i.cuentas_commit
+group by industria
+order by beneficio_total desc ;
+
+
+
+
+
+-- 4. Evolución del Pronóstico y Beneficio Real: Análisis de la Trayectoria por Categoría
+
+with  beneficio_total as(
+    select category,
+           sum(profit) beneficio_total_2021
+    from sales
+    where year = 2021
+    group by category
+),
+previson_total as(
+    select category,
+           min(opportunity_age) as oportunidad_mas_reciente,
+           max(opportunity_age) as oportunidad_mas_antigua,
+           sum(forecast) as prevision_total_2022
+    from forecasts
+    where year = 2022
+    group by category
+)
+
+select coalesce(bt.category,pt.category) as categoria,
+       bt.beneficio_total_2021,
+       pt.prevision_total_2022,
+       pt.oportunidad_mas_reciente,
+       pt.oportunidad_mas_antigua    
+        
+from beneficio_total as bt 
+full outer join previson_total as pt
+on bt.category = pt.category
+order by beneficio_total_2021 desc;
+
+
+-------------------------------
+-------------------------------
+-------------------------------
+
+--Caso Practico: Crecimiento por region:
+
+--¿Qué región ha experimentado el mayor crecimiento en ventas y beneficios entre 2020 y 2021?
+
+-- Vemos primero un pequeño analisis
+select
+    a.region,
+    sum(s.total) as ventas,
+    sum(s.profit) as beneficio
+from sales s join accounts a 
+on s.account = a.account
+where s.year in(2020,2021)
+group by a.region
+order by ventas desc;
+
+-- Vemos que entre 2020 y 2021, la region de EMEA ha sido la que mayor beneficios ha generado, vamos a ver ahora cual es la que ha tenido un mayor crecimiento.
+
+-- datos 2020
+create or replace view datos_2020 as
+    select a.region as Region,
+           s.year as "año",
+           sum(s.total) as ventas,
+           sum(s.profit) as beneficio,
+           sum(s.product + s.parts) as productos,
+           sum(s.maintenance + s.support) as servicios
+    from sales s join accounts a 
+    on s.account = a.account
+    where s.year = 2020
+    group by Region, "año"
+    order by beneficio desc;
+
+select * from datos_2020;  
+
+-- datos 2021
+
+create or replace view datos_2021 as 
+    select a.region as Region,
+           s.year as "año",
+           sum(s.total) as ventas,
+           sum(s.profit) as beneficio,
+           sum(s.product + s.parts) as productos,
+           sum(s.maintenance + s.support) as servicios
+    from sales s join accounts a 
+    on s.account = a.account
+    where s.year = 2021
+    group by Region, "año"
+    order by beneficio desc;
+
+select * from datos_2021;
+
+-- crecimiento 2020 a 2021
+
+
+with datos_2020 as (
+    select a.region as Region,
+           s.year as "año",
+           sum(s.total) as ventas,
+           sum(s.profit) as beneficio,
+           sum(s.product + s.parts) as productos,
+           sum(s.maintenance + s.support) as servicios
+    from sales s join accounts a 
+    on s.account = a.account
+    where s.year = 2020
+    group by Region, "año"
+), 
+datos_2021 as (
+    select a.region as Region,
+           s.year as "año",
+           sum(s.total) as ventas,
+           sum(s.profit) as beneficio,
+           sum(s.product + s.parts) as productos,
+           sum(s.maintenance + s.support) as servicios
+    from sales s join accounts a 
+    on s.account = a.account
+    where s.year = 2021
+    group by Region, "año"
+)
+select d20.Region,
+       d21.ventas - d20.ventas as crecimiento_ventas,
+       round((crecimiento_ventas/d20.ventas)*100,2) as porcentaje_ventas,
+       d21.beneficio - d20.beneficio as crecimiento_beneficios,
+       round((crecimiento_beneficios/d20.beneficio)*100,2) as porcentaje_beneficio,
+       round(((d21.productos - d20.productos)/((d21.productos - d20.productos)+ (d21.servicios - d20.servicios)))*100,2) as proporcion_producto,
+       round(((d21.servicios - d20.servicios)/((d21.productos - d20.productos)+ (d21.servicios - d20.servicios)))*100,2) as proporcion_servicio            
+from datos_2020 as d20 join datos_2021 as d21
+on d20.Region = d21.Region
+order by crecimiento_ventas desc;
+
+-- Viendo estos resultados ,podemos concluir que la region que ha experimentado un mayor crecimiento en ventas de 2020 a 2021 ha sido NAM y ademas vemos que el impulsor de estas ventas han sido por productos 
+
+
+
+
+
+
